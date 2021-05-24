@@ -1,0 +1,46 @@
+{
+    "Developer": "ygw",
+    "company": "com2us",
+    "rank": [
+      {
+        "name": "Dantes",
+        "point": "999999"
+      },
+      {
+        "name": "Caderousse",
+        "point": "888888"
+      },
+      {
+        "name": "Mondego",
+        "point": "777777"
+      },
+      {
+        "name": "Morcerf",
+        "point": "666666"
+      },
+      {
+        "name": "Danglars",
+        "point": "555555"
+      },
+      {
+        "name": "VileFort",
+        "point": "444444"
+      },
+      {
+        "name": "Morrel",
+        "point": "333333"
+      },
+      {
+        "name": "Haydee",
+        "point": "222222"
+      },
+      {
+        "name": "Bertuccio",
+        "point": "111111"
+      },
+      {
+        "name": "Faria",
+        "point": "1"
+      }
+    ]
+  }
