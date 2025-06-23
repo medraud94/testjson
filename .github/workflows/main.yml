@@ -22,7 +22,10 @@ jobs:
         run: |
           # 컨테이너 이름으로 사용할 수 있도록 리포지토리 이름에서 '/'를 '-'로 변경
           CONTAINER_NAME=$(echo ${{ github.repository }} | sed 's/\//-/g')
-          IMAGE_TAG=local-test-$(date +%Y%m%d%H%M)-${{ github.sha | cut -c1-7 }}
+          
+          # github.sha 값을 셸 변수로 가져온 뒤, cut 명령어로 자릅니다.
+          COMMIT_SHA_SHORT=$(echo ${{ github.sha }} | cut -c1-7)
+          IMAGE_TAG=local-test-$(date +%Y%m%d%H%M)-${COMMIT_SHA_SHORT}
           
           # 이후 단계에서 사용할 수 있도록 환경 변수로 설정
           echo "IMAGE_NAME=localhost:5000/${{ github.repository }}:${IMAGE_TAG}" >> $GITHUB_ENV
