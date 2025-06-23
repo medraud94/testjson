@@ -12,8 +12,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # 5. 애플리케이션 포트 노출
-EXPOSE 8080
+EXPOSE 5000
 
 # 6. 애플리케이션 실행
 # Gunicorn을 사용하여 앱을 안정적으로 실행합니다.
-CMD ["gunicorn", "-b", "0.0.0.0:8080", "app:app"] 
+CMD ["gunicorn", "-b", "0.0.0.0:5000", "app:app"] 

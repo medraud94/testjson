@@ -126,5 +126,6 @@ def info():
     })
 
 if __name__ == "__main__":
-    # 포트는 8080을 사용하도록 설정
-    app.run(host='0.0.0.0', port=8080, debug=False) 
+    # 환경변수에서 포트를 가져오거나 기본값 5000 사용
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port, debug=False) 
