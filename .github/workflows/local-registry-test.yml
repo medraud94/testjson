@@ -1,4 +1,4 @@
-name: Local Registry Test
+name: Docker Registry CI/CD Test
 
 on:
   push:
@@ -12,173 +12,129 @@ env:
   IMAGE_NAME: testjson
 
 jobs:
-  # 환경 결정
-  setup:
-    runs-on: self-hosted
-    outputs:
-      environment: ${{ steps.env.outputs.environment }}
-      image-tag: ${{ steps.env.outputs.image-tag }}
-    
-    steps:
-    - name: Determine environment
-      id: env
-      run: |
-        # 브랜치별 환경 결정
-        if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
-          echo "environment=production" >> $GITHUB_OUTPUT
-        elif [[ "${{ github.ref }}" == "refs/heads/develop" ]]; then
-          echo "environment=staging" >> $GITHUB_OUTPUT
-        else
-          echo "environment=development" >> $GITHUB_OUTPUT
-        fi
-        
-        # 이미지 태그 생성
-        BRANCH_NAME=$(echo "${{ github.ref_name }}" | sed 's/[^a-zA-Z0-9.-]/-/g')
-        COMMIT_SHORT=$(echo "${{ github.sha }}" | cut -c1-8)
-        IMAGE_TAG="${{ steps.env.outputs.environment }}-${BRANCH_NAME}-${COMMIT_SHORT}"
-        echo "image-tag=$IMAGE_TAG" >> $GITHUB_OUTPUT
-        
-        echo "🎯 Environment: ${{ steps.env.outputs.environment }}"
-        echo "🏷️  Image Tag: $IMAGE_TAG"
-
-  # 빌드 및 Registry 푸시
-  build:
-    needs: setup
+  build-and-deploy:
     runs-on: self-hosted
     
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
-
+      uses: actions/checkout@v3
+      with:
+        clean: true
+        fetch-depth: 0
+        
+    - name: Determine environment from branch
+      id: env
+      run: |
+        if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
+          echo "environment=production" >> $GITHUB_OUTPUT
+          echo "port=15401" >> $GITHUB_OUTPUT
+        elif [[ "${{ github.ref }}" == "refs/heads/develop" ]]; then
+          echo "environment=staging" >> $GITHUB_OUTPUT  
+          echo "port=15402" >> $GITHUB_OUTPUT
+        else
+          echo "environment=development" >> $GITHUB_OUTPUT
+          echo "port=15403" >> $GITHUB_OUTPUT
+        fi
+        
+    - name: Set image tag
+      id: tag
+      run: |
+        BRANCH_NAME=${GITHUB_REF#refs/heads/}
+        BRANCH_NAME=${BRANCH_NAME//\//-}  # Replace / with -
+        SHORT_SHA=${GITHUB_SHA:0:7}
+        IMAGE_TAG="${{ steps.env.outputs.environment }}-${BRANCH_NAME}-${SHORT_SHA}"
+        echo "tag=${IMAGE_TAG}" >> $GITHUB_OUTPUT
+        echo "📦 Image tag: ${IMAGE_TAG}"
+        
     - name: Check Registry connectivity
       run: |
-        echo "🔍 Registry 연결 확인: ${{ env.REGISTRY_URL }}"
-        if curl -f http://${{ env.REGISTRY_URL }}/v2/ 2>/dev/null; then
-          echo "✅ Registry 연결 성공"
-        else
-          echo "❌ Registry 연결 실패 - Registry가 실행 중인지 확인하세요"
-          echo "💡 Registry 시작: cd docker-registry && ./start-registry.sh"
-          exit 1
-        fi
-
+        echo "🔍 Registry 연결 테스트..."
+        curl -f http://${{ env.REGISTRY_URL }}/v2/ || (echo "❌ Registry 접근 실패" && exit 1)
+        echo "✅ Registry 접근 성공"
+        
     - name: Build Docker image
       run: |
         echo "🔨 Docker 이미지 빌드 중..."
-        docker build \
-          --build-arg IMAGE_TAG=${{ needs.setup.outputs.image-tag }} \
-          --build-arg ENVIRONMENT=${{ needs.setup.outputs.environment }} \
-          --build-arg COMMIT_SHA=${{ github.sha }} \
-          --build-arg BRANCH_NAME=${{ github.ref_name }} \
-          -t ${{ env.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:${{ needs.setup.outputs.image-tag }} \
-          -t ${{ env.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:latest \
-          .
+        echo "Registry: ${{ env.REGISTRY_URL }}"
+        echo "Image: ${{ env.IMAGE_NAME }}"
+        echo "Tag: ${{ steps.tag.outputs.tag }}"
         
-        echo "✅ 이미지 빌드 완료"
-        docker images | grep ${{ env.IMAGE_NAME }}
-
+        docker build -t ${{ env.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.tag }} . || {
+          echo "❌ Docker 빌드 실패"
+          echo "=== Docker 로그 ==="
+          docker system df
+          docker images
+          exit 1
+        }
+        
+        echo "✅ Docker 이미지 빌드 완료"
+        
     - name: Push to Registry
       run: |
-        echo "📦 Registry에 이미지 푸시 중..."
-        
-        # 태그별 푸시
-        docker push ${{ env.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:${{ needs.setup.outputs.image-tag }}
-        docker push ${{ env.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:latest
-        
-        echo "✅ 푸시 완료!"
-        echo "📦 Image: ${{ env.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:${{ needs.setup.outputs.image-tag }}"
-
-    - name: Verify image in Registry
-      run: |
-        echo "🔍 Registry에서 이미지 확인 중..."
-        
-        # Registry API로 이미지 확인
-        if curl -f http://${{ env.REGISTRY_URL }}/v2/${{ env.IMAGE_NAME }}/tags/list 2>/dev/null; then
-          echo "✅ 이미지가 Registry에 성공적으로 저장됨"
-          curl -s http://${{ env.REGISTRY_URL }}/v2/${{ env.IMAGE_NAME }}/tags/list | jq .
-        else
-          echo "❌ Registry에서 이미지를 찾을 수 없음"
+        echo "📤 Registry에 이미지 푸시 중..."
+        docker push ${{ env.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.tag }} || {
+          echo "❌ Registry 푸시 실패"
+          echo "=== Registry 상태 확인 ==="
+          curl -s http://${{ env.REGISTRY_URL }}/v2/_catalog || echo "Registry 카탈로그 조회 실패"
           exit 1
-        fi
-
-  # 로컬 테스트 배포 (실제 서버 배포 전 테스트)
-  test-deploy:
-    needs: [setup, build]
-    runs-on: self-hosted
-    if: success()
-    
-    steps:
-    - name: Test local deployment
-      run: |
-        echo "🚀 로컬 테스트 배포 시작..."
+        }
+        echo "✅ Registry 푸시 완료"
         
-        # 기존 테스트 컨테이너 정리
-        CONTAINER_NAME="testjson-local-test"
-        if docker ps -a --format "table {{.Names}}" | grep -q "^$CONTAINER_NAME$"; then
-          echo "🛑 기존 테스트 컨테이너 정리"
-          docker stop $CONTAINER_NAME || true
-          docker rm $CONTAINER_NAME || true
-        fi
+    - name: Deploy locally (Test)
+      run: |
+        echo "🚀 로컬 테스트 배포 중..."
+        
+        # 기존 컨테이너 정리
+        docker stop testjson-${{ steps.env.outputs.environment }} 2>/dev/null || true
+        docker rm testjson-${{ steps.env.outputs.environment }} 2>/dev/null || true
         
         # 새 컨테이너 실행
-        echo "🚀 새 컨테이너 실행"
         docker run -d \
-          --name $CONTAINER_NAME \
-          -p 8081:8080 \
-          -e IMAGE_TAG=${{ needs.setup.outputs.image-tag }} \
-          -e ENVIRONMENT=${{ needs.setup.outputs.environment }} \
-          -e BRANCH_NAME=${{ github.ref_name }} \
+          --name testjson-${{ steps.env.outputs.environment }} \
+          -p ${{ steps.env.outputs.port }}:5000 \
+          -e ENVIRONMENT=${{ steps.env.outputs.environment }} \
+          -e BRANCH=${GITHUB_REF#refs/heads/} \
           -e COMMIT_SHA=${{ github.sha }} \
-          ${{ env.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:${{ needs.setup.outputs.image-tag }}
-        
+          ${{ env.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.tag }}
+          
         echo "⏳ 컨테이너 시작 대기..."
         sleep 10
-
-    - name: Health check
-      run: |
-        echo "🏥 헬스체크 수행 중..."
         
-        # 최대 1분 동안 헬스체크
-        for i in {1..6}; do
-          if curl -f http://localhost:8081/ > /dev/null 2>&1; then
-            echo "✅ 헬스체크 성공!"
-            echo "🌐 앱 URL: http://localhost:8081"
-            
-            # 앱 응답 확인
-            echo "📱 앱 응답:"
-            curl -s http://localhost:8081/ | head -5
+    - name: Health Check
+      run: |
+        echo "🏥 Health Check 수행 중..."
+        
+        # Health endpoint 확인
+        HEALTH_URL="http://localhost:${{ steps.env.outputs.port }}/health"
+        echo "Health Check URL: ${HEALTH_URL}"
+        
+        for i in {1..5}; do
+          if curl -f ${HEALTH_URL}; then
+            echo "✅ Health Check 성공!"
             break
+          else
+            echo "❌ Health Check 실패 (시도 $i/5)"
+            if [ $i -eq 5 ]; then
+              echo "=== 컨테이너 로그 ==="
+              docker logs testjson-${{ steps.env.outputs.environment }}
+              exit 1
+            fi
+            sleep 5
           fi
-          echo "⏳ 헬스체크 대기 중... ($i/6)"
-          sleep 10
         done
-
-  # 결과 알림
-  notify:
-    needs: [setup, build, test-deploy]
-    runs-on: self-hosted
-    if: always()
-    
-    steps:
-    - name: Deployment summary
+        
+        # 앱 정보 확인
+        echo "📋 배포된 앱 정보:"
+        curl -s http://localhost:${{ steps.env.outputs.port }}/ || echo "앱 정보 조회 실패"
+        
+    - name: Deployment Summary
+      if: always()
       run: |
-        echo "📊 ==================================="
-        echo "📊 CI/CD 테스트 결과 요약"
-        echo "📊 ==================================="
-        echo "🎯 Environment: ${{ needs.setup.outputs.environment }}"
-        echo "🌿 Branch: ${{ github.ref_name }}"
-        echo "🏷️  Image Tag: ${{ needs.setup.outputs.image-tag }}"
-        echo "📦 Registry: ${{ env.REGISTRY_URL }}"
-        echo "🔗 Commit: ${{ github.sha }}"
+        echo "🎯 배포 완료!"
+        echo "Environment: ${{ steps.env.outputs.environment }}"
+        echo "Image: ${{ env.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.tag }}"
+        echo "Port: ${{ steps.env.outputs.port }}"
+        echo "URL: http://localhost:${{ steps.env.outputs.port }}"
         
-        if [[ "${{ needs.test-deploy.result }}" == "success" ]]; then
-          echo "✅ 상태: 성공"
-          echo "🌐 테스트 URL: http://localhost:8081"
-        else
-          echo "❌ 상태: 실패"
-        fi
-        
-        echo "📊 ==================================="
-        
-        # Registry UI 링크
-        echo "🖥️  Registry UI: http://localhost:8090"
-        echo "💡 Registry 관리: cd docker-registry && docker-compose logs" 
+        echo "=== Registry 상태 ==="
+        curl -s http://${{ env.REGISTRY_URL }}/v2/_catalog | jq . || echo "Registry 조회 실패" 
