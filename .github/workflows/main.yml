@@ -1,10 +1,19 @@
-name: Local Test Build and Deploy
+name: Build and Deploy (from Dashboard)
 
 on:
   # 'main' 브랜치에 코드가 푸시될 때마다 이 워크플로우를 실행합니다.
   push:
     branches:
       - main
+      
+  # API나 UI를 통해 수동으로 실행할 수 있도록 workflow_dispatch 트리거 추가
+  workflow_dispatch:
+    inputs:
+      # 'branch'라는 이름의 파라미터를 받음
+      branch:
+        description: '배포할 브랜치'
+        required: true
+        default: 'main'
 
 jobs:
   build-and-deploy-local:
@@ -12,9 +21,13 @@ jobs:
     runs-on: self-hosted
 
     steps:
-      # 1. GitHub 리포지토리의 소스 코드를 Runner로 가져옵니다.
+      # 1. 소스 코드 체크아웃
+      #    - workflow_dispatch로 실행된 경우: 입력받은 브랜치를 사용
+      #    - push로 실행된 경우: 푸시된 브랜치를 사용
       - name: Checkout source code
         uses: actions/checkout@v3
+        with:
+          ref: ${{ github.event.inputs.branch || github.ref }}
 
       # 2. Docker 이미지에 사용할 이름과 태그를 설정합니다.
       - name: Set up image name and tag
@@ -25,7 +38,10 @@ jobs:
           
           # github.sha 값을 셸 변수로 가져온 뒤, cut 명령어로 자릅니다.
           COMMIT_SHA_SHORT=$(echo ${{ github.sha }} | cut -c1-7)
-          IMAGE_TAG=local-test-$(date +%Y%m%d%H%M)-${COMMIT_SHA_SHORT}
+          
+          # 브랜치 이름을 태그에 포함시켜 구별하기 쉽게 만듦
+          BRANCH_NAME=$(echo ${{ github.event.inputs.branch || github.ref_name }} | sed 's/\//-/g')
+          IMAGE_TAG=${BRANCH_NAME}-$(date +%Y%m%d%H%M)-${COMMIT_SHA_SHORT}
           
           # 이후 단계에서 사용할 수 있도록 환경 변수로 설정
           echo "IMAGE_NAME=localhost:5000/${{ github.repository }}:${IMAGE_TAG}" >> $GITHUB_ENV
